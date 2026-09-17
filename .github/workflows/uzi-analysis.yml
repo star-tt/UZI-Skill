@@ -95,6 +95,25 @@ jobs:
             --no-browser \
             --output "$GITHUB_WORKSPACE/out"
 
+      - name: Validate daily market data
+        if: github.event_name == 'schedule' || inputs.task == 'daily'
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report_path = Path("out/picks.json")
+          if not report_path.is_file():
+              raise SystemExit("Daily screen did not create out/picks.json")
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          errors = report.get("market_errors") or {}
+          if errors:
+              raise SystemExit(f"Daily market data unavailable: {errors}")
+          if not Path("out/index.html").is_file():
+              raise SystemExit("Daily screen did not create out/index.html")
+          print(f"Validated daily report: {len(report.get('picks') or [])} picks")
+          PY
+
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
