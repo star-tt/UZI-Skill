@@ -1,0 +1,105 @@
+name: UZI analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Run a single-symbol report or the daily A-share screen
+        required: true
+        default: single
+        type: choice
+        options:
+          - single
+          - daily
+      ticker:
+        description: Symbol or Chinese name used by the single task
+        required: false
+        default: 600519.SH
+        type: string
+      depth:
+        description: Analysis depth used by the single task
+        required: true
+        default: lite
+        type: choice
+        options:
+          - lite
+          - medium
+  schedule:
+    # 15:30 Asia/Shanghai, Monday-Friday. The script handles non-trading days.
+    - cron: "30 7 * * 1-5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uzi-analysis-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+      UZI_NO_UPDATE_CHECK: "1"
+      UZI_DDG_TIMEOUT: "8"
+      UZI_TICKER: ${{ inputs.ticker }}
+      UZI_DEPTH: ${{ inputs.depth }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip check
+
+      - name: Validate single-symbol input
+        if: github.event_name == 'workflow_dispatch' && inputs.task == 'single'
+        run: |
+          python - <<'PY'
+          import os
+          import re
+
+          ticker = os.environ["UZI_TICKER"].strip()
+          if not re.fullmatch(r"[A-Za-z0-9.\-\u4e00-\u9fff]{1,40}", ticker):
+              raise SystemExit("Invalid ticker")
+          PY
+
+      - name: Generate single-symbol report
+        if: github.event_name == 'workflow_dispatch' && inputs.task == 'single'
+        run: |
+          python run.py "$UZI_TICKER" \
+            --depth "$UZI_DEPTH" \
+            --no-browser \
+            --output-dir "$GITHUB_WORKSPACE/out"
+
+      - name: Run daily A-share screen
+        if: github.event_name == 'schedule' || inputs.task == 'daily'
+        run: |
+          python screen.py \
+            --mode close \
+            --markets A \
+            --schools F,I \
+            --top 10 \
+            --snapshot-only \
+            --no-track \
+            --no-browser \
+            --output "$GITHUB_WORKSPACE/out"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uzi-report-${{ github.run_number }}
+          path: out
+          if-no-files-found: warn
+          retention-days: 14
